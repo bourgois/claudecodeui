@@ -154,11 +154,21 @@ To use Claude Code's full functionality, you'll need to manually enable tools:
 
 ### Codex Permission Defaults
 
-Codex chat supports `default`, `acceptEdits`, and `bypassPermissions` permission modes. The UI sends the selected mode with each Codex request.
+Codex chat supports three permission modes:
 
-For self-hosted deployments that need a server-side fallback when a client does not send a mode, set `CLOUDCLI_CODEX_PERMISSION_MODE` to one of those values. If unset or invalid, CloudCLI uses `default`.
+- `default` — uses Codex's `workspace-write` sandbox with the `untrusted` approval policy.
+- `acceptEdits` — uses the `workspace-write` sandbox with approval disabled, so Codex can apply workspace edits without prompting while staying sandboxed.
+- `bypassPermissions` — uses `danger-full-access` with no approval. Use it only in trusted local or sandboxed workspaces.
 
-`bypassPermissions` maps Codex to full access with no approval. Use it only in trusted local or sandboxed workspaces.
+The UI sends the selected mode with each Codex request. For self-hosted deployments that need a server-side fallback when a client does not send a mode, set `CLOUDCLI_CODEX_PERMISSION_MODE` to one of those values. If unset or invalid, CloudCLI uses `default`.
+
+Examples:
+
+```bash
+CLOUDCLI_CODEX_PERMISSION_MODE=default npx @cloudcli-ai/cloudcli
+CLOUDCLI_CODEX_PERMISSION_MODE=acceptEdits npx @cloudcli-ai/cloudcli
+CLOUDCLI_CODEX_PERMISSION_MODE=bypassPermissions npx @cloudcli-ai/cloudcli
+```
 
 ---
 
