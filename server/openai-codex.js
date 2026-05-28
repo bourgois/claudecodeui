@@ -218,6 +218,10 @@ function mapPermissionModeToCodexOptions(permissionMode) {
 const CODEX_PERMISSION_MODE_ENV = 'CLOUDCLI_CODEX_PERMISSION_MODE';
 const CODEX_PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions']);
 
+/**
+ * Read and validate the server-side Codex permission mode fallback.
+ * @returns {string} A valid Codex permission mode.
+ */
 function getConfiguredCodexPermissionMode() {
   const configuredPermissionMode = process.env[CODEX_PERMISSION_MODE_ENV];
   if (configuredPermissionMode == null || String(configuredPermissionMode).trim() === '') {
@@ -229,10 +233,16 @@ function getConfiguredCodexPermissionMode() {
     return normalizedPermissionMode;
   }
 
-  console.warn(`[Codex] Invalid ${CODEX_PERMISSION_MODE_ENV}; falling back to default`);
+  console.warn(`[Codex] Invalid ${CODEX_PERMISSION_MODE_ENV}="${normalizedPermissionMode}"; falling back to default`);
   return 'default';
 }
 
+/**
+ * Resolve the effective Codex permission mode from explicit request options or environment fallback.
+ * @param {string|undefined} permissionMode - Permission mode received from the request.
+ * @param {boolean} hasExplicitPermissionMode - Whether the request included permissionMode.
+ * @returns {string} A valid Codex permission mode.
+ */
 function resolveCodexPermissionMode(permissionMode, hasExplicitPermissionMode) {
   if (!hasExplicitPermissionMode) {
     return getConfiguredCodexPermissionMode();
@@ -243,7 +253,7 @@ function resolveCodexPermissionMode(permissionMode, hasExplicitPermissionMode) {
     return normalizedPermissionMode;
   }
 
-  console.warn('[Codex] Invalid request permission mode; falling back to default');
+  console.warn(`[Codex] Invalid request permission mode="${normalizedPermissionMode}"; falling back to default`);
   return 'default';
 }
 
