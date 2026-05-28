@@ -215,6 +215,38 @@ function mapPermissionModeToCodexOptions(permissionMode) {
   }
 }
 
+const CODEX_PERMISSION_MODE_ENV = 'CLOUDCLI_CODEX_PERMISSION_MODE';
+const CODEX_PERMISSION_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions']);
+
+function getConfiguredCodexPermissionMode() {
+  const configuredPermissionMode = process.env[CODEX_PERMISSION_MODE_ENV];
+  if (configuredPermissionMode == null || String(configuredPermissionMode).trim() === '') {
+    return 'default';
+  }
+
+  const normalizedPermissionMode = String(configuredPermissionMode).trim();
+  if (CODEX_PERMISSION_MODES.has(normalizedPermissionMode)) {
+    return normalizedPermissionMode;
+  }
+
+  console.warn(`[Codex] Invalid ${CODEX_PERMISSION_MODE_ENV}; falling back to default`);
+  return 'default';
+}
+
+function resolveCodexPermissionMode(permissionMode, hasExplicitPermissionMode) {
+  if (!hasExplicitPermissionMode) {
+    return getConfiguredCodexPermissionMode();
+  }
+
+  const normalizedPermissionMode = String(permissionMode).trim();
+  if (CODEX_PERMISSION_MODES.has(normalizedPermissionMode)) {
+    return normalizedPermissionMode;
+  }
+
+  console.warn('[Codex] Invalid request permission mode; falling back to default');
+  return 'default';
+}
+
 /**
  * Execute a Codex query with streaming
  * @param {string} command - The prompt to send
@@ -228,7 +260,7 @@ export async function queryCodex(command, options = {}, ws) {
     cwd,
     projectPath,
     model,
-    permissionMode = 'default'
+    permissionMode
   } = options;
 
   const resolvedModel = await providerModelsService.resolveResumeModel(
@@ -237,8 +269,10 @@ export async function queryCodex(command, options = {}, ws) {
     model,
   );
 
+  const hasExplicitPermissionMode = Object.prototype.hasOwnProperty.call(options, 'permissionMode');
+  const effectivePermissionMode = resolveCodexPermissionMode(permissionMode, hasExplicitPermissionMode);
   const workingDirectory = cwd || projectPath || process.cwd();
-  const { sandboxMode, approvalPolicy } = mapPermissionModeToCodexOptions(permissionMode);
+  const { sandboxMode, approvalPolicy } = mapPermissionModeToCodexOptions(effectivePermissionMode);
 
   let codex;
   let thread;

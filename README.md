@@ -152,6 +152,14 @@ To use Claude Code's full functionality, you'll need to manually enable tools:
 
 **Recommended approach**: Start with basic tools enabled and add more as needed. You can always adjust these settings later.
 
+### Codex Permission Defaults
+
+Codex chat supports `default`, `acceptEdits`, and `bypassPermissions` permission modes. The UI sends the selected mode with each Codex request.
+
+For self-hosted deployments that need a server-side fallback when a client does not send a mode, set `CLOUDCLI_CODEX_PERMISSION_MODE` to one of those values. If unset or invalid, CloudCLI uses `default`.
+
+`bypassPermissions` maps Codex to full access with no approval. Use it only in trusted local or sandboxed workspaces.
+
 ---
 
 ## Plugins
