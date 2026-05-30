@@ -38,14 +38,14 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
 
     let processed = 0;
     for (const filePath of files) {
-      // PATCH (kamioj): subagent .jsonl 文件共享父 session 的 sessionId，
-      // 会被当成主 session 写入 DB → 污染主会话记录。直接跳过。
-      if (
-        filePath.includes(`${path.sep}subagents${path.sep}`) ||
-        filePath.replace(/\\/g, '/').includes('/subagents/')
-      ) {
+      // Skip subagent JSONL files — they share the parent session's sessionId
+      // and would overwrite the correct jsonl_path with the subagent path
+      const pathSegments = path.normalize(filePath).split(path.sep);
+      if (pathSegments.includes('subagents')) {
         continue;
       }
+
+
       const parsed = await this.processSessionFile(filePath, nameMap);
       if (!parsed) {
         continue;
