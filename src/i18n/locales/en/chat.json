@@ -274,5 +274,16 @@
   },
   "tasks": {
     "nextTaskPrompt": "Start the next task"
+  },
+  "scrollNav": {
+    "jumpTo": "Jump to: {{snippet}}",
+    "jumpToMessage": "Jump to message {{index}}",
+    "fromYou": "You",
+    "aiReply": "AI Reply",
+    "loadAll": "Load all",
+    "first": "Top",
+    "previous": "Previous",
+    "next": "Next",
+    "last": "Bottom"
   }
 }
