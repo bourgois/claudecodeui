@@ -306,9 +306,30 @@ export function useChatRealtimeHandlers({
             onNavigateToSession?.(actualSessionId, { replace: true });
             setTimeout(() => { void paletteOps.refreshProjects(); }, 500);
           }
+
+          // Refresh from server using the resolved session ID so we fetch the
+          // correct canonical JSONL history, replacing any client-side streaming
+          // echoes with committed messages.
+          void sessionStore.refreshFromServer(actualSessionId);
           break;
         }
 
+        // Clear pending session
+        if (pendingSessionId && !currentSessionId && completedSuccessfully) {
+          const resolvedSessionId = actualSessionId || pendingSessionId;
+          setCurrentSessionId(resolvedSessionId);
+          if (actualSessionId) {
+            onNavigateToSession?.(resolvedSessionId, { replace: true });
+          }
+          sessionStorage.removeItem('pendingSessionId');
+          setTimeout(() => { void paletteOps.refreshProjects(); }, 500);
+        }
+
+        // Refresh from server so the canonical JSONL history replaces any
+        // client-side streaming echoes with committed messages.
+        if (sid) {
+          void sessionStore.refreshFromServer(sid);
+        }
         break;
       }
 
