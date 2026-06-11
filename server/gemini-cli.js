@@ -119,6 +119,29 @@ async function buildGeminiProcessEnv() {
     return processEnv;
 }
 
+/**
+ * Spawns a Gemini CLI process for a given command and streams its output over a WebSocket.
+ *
+ * Handles session resumption (including automatic retry when a stored cliSessionId has gone
+ * stale after a Gemini restart), tool-use permission enforcement, image attachments, and
+ * graceful fallback to `--resume latest` on exit-code 42 + "Invalid session identifier".
+ *
+ * @param {string} command - The user prompt to send to Gemini, or an empty string for a
+ *   passive resume (session reconnect with no new message).
+ * @param {object} [options={}] - Spawn options.
+ * @param {string}  [options.sessionId]      - Existing session ID to resume.
+ * @param {string}  [options.projectPath]    - Gemini metadata directory for the project.
+ * @param {string}  [options.cwd]            - Working directory for the Gemini process.
+ * @param {object}  [options.toolsSettings]  - Allowed/disallowed tools and permission flags.
+ * @param {string}  [options.permissionMode] - Permission mode passed to Gemini.
+ * @param {Array}   [options.images]         - Base-64 image attachments.
+ * @param {string}  [options.sessionSummary] - Optional summary injected into the session.
+ * @param {string}  [options.model]          - Model override; resolved via providerModelsService if omitted.
+ * @param {boolean} [options._retried]       - Internal flag — set on the automatic retry to prevent loops.
+ * @param {boolean} [options._resumeLatest]  - Internal flag — uses `--resume latest` instead of a specific ID.
+ * @param {object} ws - WebSocket-compatible writer used to stream events to the client.
+ * @returns {Promise<void>} Resolves when the Gemini process exits cleanly; rejects on unrecoverable errors.
+ */
 async function spawnGemini(command, options = {}, ws) {
     const { sessionId, projectPath, cwd, toolsSettings, permissionMode, images, sessionSummary } = options;
     const resolvedModel = await providerModelsService.resolveResumeModel(
@@ -129,6 +152,8 @@ async function spawnGemini(command, options = {}, ws) {
     let capturedSessionId = sessionId; // Track session ID throughout the process
     let sessionCreatedSent = false; // Track if we've already sent session-created event
     let assistantBlocks = []; // Accumulate the full response blocks including tools
+    let stderrHasInvalidSession = false; // Detect stale cliSessionId errors
+    let invalidSessionStderrBuffer = []; // Hold invalid-session messages until we know if we'll retry
 
     // Use tools settings passed from frontend, or defaults
     const settings = toolsSettings || {
@@ -147,9 +172,14 @@ async function spawnGemini(command, options = {}, ws) {
 
     // If we have a sessionId, we want to resume
     if (sessionId) {
-        const session = sessionManager.getSession(sessionId);
-        if (session && session.cliSessionId) {
-            args.push('--resume', session.cliSessionId);
+        if (options._resumeLatest) {
+            // Fallback: stale/mismatched cliSessionId — let Gemini pick the newest file
+            args.push('--resume', 'latest');
+        } else {
+            const session = sessionManager.getSession(sessionId);
+            if (session && session.cliSessionId) {
+                args.push('--resume', session.cliSessionId);
+            }
         }
     }
 
@@ -424,7 +454,8 @@ async function spawnGemini(command, options = {}, ws) {
                     }
 
                     const sess = sessionManager.getSession(capturedSessionId);
-                    if (sess && !sess.cliSessionId) {
+                    if (sess) {
+                        // Always refresh so stale IDs from prior Gemini runs are replaced
                         sess.cliSessionId = discoveredSessionId;
                         sessionManager.saveSession(capturedSessionId);
                     }
@@ -464,6 +495,19 @@ async function spawnGemini(command, options = {}, ws) {
             }
 
             const socketSessionId = typeof ws.getSessionId === 'function' ? ws.getSessionId() : (capturedSessionId || sessionId);
+
+            if (errorMsg.toLowerCase().includes('invalid session identifier')) {
+                stderrHasInvalidSession = true;
+            }
+
+            // If this is an invalid-session error and a retry is possible, buffer it
+            // rather than sending immediately — it will be discarded on a successful
+            // retry, or flushed to the client if the retry also fails / won't happen.
+            if (stderrHasInvalidSession && !options._retried) {
+                invalidSessionStderrBuffer.push({ errorMsg, socketSessionId });
+                return;
+            }
+
             ws.send(createNormalizedMessage({ kind: 'error', content: errorMsg, sessionId: socketSessionId, provider: 'gemini' }));
         });
 
@@ -486,7 +530,16 @@ async function spawnGemini(command, options = {}, ws) {
                 sessionManager.addMessage(finalSessionId, 'assistant', assistantBlocks);
             }
 
-            ws.send(createNormalizedMessage({ kind: 'complete', exitCode: code, isNewSession: !sessionId && !!command, sessionId: finalSessionId, provider: 'gemini' }));
+            // Suppress 'complete' (and buffered invalid-session errors) when we're
+            // about to retry — the retry emits its own events. If no retry, flush
+            // any buffered messages so the client sees the real error.
+            const willRetry = code === 42 && sessionId && stderrHasInvalidSession && !options._retried;
+            if (!willRetry) {
+                for (const { errorMsg, socketSessionId } of invalidSessionStderrBuffer) {
+                    ws.send(createNormalizedMessage({ kind: 'error', content: errorMsg, sessionId: socketSessionId, provider: 'gemini' }));
+                }
+                ws.send(createNormalizedMessage({ kind: 'complete', exitCode: code, isNewSession: !sessionId && !!command, sessionId: finalSessionId, provider: 'gemini' }));
+            }
 
             // Clean up temporary image files if any
             if (geminiProcess.tempImagePaths && geminiProcess.tempImagePaths.length > 0) {
@@ -501,6 +554,20 @@ async function spawnGemini(command, options = {}, ws) {
             if (code === 0) {
                 notifyTerminalState({ code });
                 resolve();
+            } else if (code === 42 && sessionId && stderrHasInvalidSession && !options._retried) {
+                // Gemini rejected --resume <id> because the stored cliSessionId is stale.
+                // Clear it and retry once with --resume latest so the newest chat file is used.
+                const staleSession = sessionManager.getSession(sessionId);
+                if (staleSession) {
+                    staleSession.cliSessionId = null;
+                    sessionManager.saveSession(sessionId);
+                }
+                try {
+                    await spawnGemini(command, { ...options, _retried: true, _resumeLatest: true }, ws);
+                    resolve();
+                } catch (retryErr) {
+                    reject(retryErr);
+                }
             } else {
                 const socketSessionId = typeof ws.getSessionId === 'function' ? ws.getSessionId() : finalSessionId;
 
