@@ -103,6 +103,18 @@ async function parseAgentTools(filePath: string): Promise<AnyRecord[]> {
   return tools;
 }
 
+/**
+ * Short-lived cache of parsed+sorted transcripts, keyed by JSONL path and
+ * invalidated on file mtime/size change. fetchHistory parses the entire
+ * transcript on every request (to compute an accurate total), so a single
+ * session load — which fires several message/token-usage requests, doubled
+ * again by React StrictMode in dev — would otherwise re-read and re-parse a
+ * multi-MB file many times, blocking Node's event loop. Caching collapses
+ * that burst (and idle re-polls of unchanged sessions) into one parse.
+ */
+const SESSION_MESSAGES_CACHE_TTL_MS = 5000;
+const sessionMessagesCache = new Map<string, { mtimeMs: number; size: number; at: number; sorted: AnyRecord[] }>();
+
 /** Read the main JSONL transcript and merge in subagent tool messages from agent-*.jsonl files. */
 async function getSessionMessages(
   sessionId: string,
@@ -116,68 +128,101 @@ async function getSessionMessages(
       return { messages: [], total: 0, hasMore: false };
     }
 
-    const projectDir = path.dirname(jsonLPath);
-    const files = await fsp.readdir(projectDir);
-    const agentFiles = files.filter((file) => file.endsWith('.jsonl') && file.startsWith('agent-'));
+    // Reuse a recently-parsed transcript when the file is unchanged, so the
+    // burst of requests fired on a single session load doesn't re-parse a
+    // multi-MB file several times over.
+    let fileStat: { mtimeMs: number; size: number } | null = null;
+    try {
+      const stat = await fsp.stat(jsonLPath);
+      fileStat = { mtimeMs: stat.mtimeMs, size: stat.size };
+    } catch {
+      // Stat failure (e.g. mid-write) — fall through and parse without caching.
+    }
 
-    const messages: AnyRecord[] = [];
-    const agentToolsCache = new Map<string, AnyRecord[]>();
+    const cached = fileStat ? sessionMessagesCache.get(jsonLPath) : undefined;
+    let sortedMessages: AnyRecord[];
+    if (
+      cached &&
+      fileStat &&
+      cached.mtimeMs === fileStat.mtimeMs &&
+      cached.size === fileStat.size &&
+      Date.now() - cached.at < SESSION_MESSAGES_CACHE_TTL_MS
+    ) {
+      sortedMessages = cached.sorted;
+    } else {
+      const projectDir = path.dirname(jsonLPath);
+      const files = await fsp.readdir(projectDir);
+      const agentFiles = files.filter((file) => file.endsWith('.jsonl') && file.startsWith('agent-'));
 
-    const fileStream = fs.createReadStream(jsonLPath);
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity,
-    });
+      const messages: AnyRecord[] = [];
+      const agentToolsCache = new Map<string, AnyRecord[]>();
 
-    for await (const line of rl) {
-      if (!line.trim()) {
-        continue;
-      }
+      const fileStream = fs.createReadStream(jsonLPath);
+      const rl = readline.createInterface({
+        input: fileStream,
+        crlfDelay: Infinity,
+      });
 
-      try {
-        const entry = JSON.parse(line) as AnyRecord;
-        if (entry.sessionId === sessionId) {
-          messages.push(entry);
+      for await (const line of rl) {
+        if (!line.trim()) {
+          continue;
         }
-      } catch {
-        // Skip malformed JSONL lines that can happen during concurrent writes.
+
+        try {
+          const entry = JSON.parse(line) as AnyRecord;
+          if (entry.sessionId === sessionId) {
+            messages.push(entry);
+          }
+        } catch {
+          // Skip malformed JSONL lines that can happen during concurrent writes.
+        }
+      }
+
+      const agentIds = new Set<string>();
+      for (const message of messages) {
+        const agentId = message.toolUseResult?.agentId;
+        if (agentId) {
+          agentIds.add(String(agentId));
+        }
+      }
+
+      for (const agentId of agentIds) {
+        const agentFileName = `agent-${agentId}.jsonl`;
+        if (!agentFiles.includes(agentFileName)) {
+          continue;
+        }
+
+        const agentFilePath = path.join(projectDir, agentFileName);
+        const tools = await parseAgentTools(agentFilePath);
+        agentToolsCache.set(agentId, tools);
+      }
+
+      for (const message of messages) {
+        const agentId = message.toolUseResult?.agentId;
+        if (!agentId) {
+          continue;
+        }
+
+        const agentTools = agentToolsCache.get(String(agentId));
+        if (agentTools && agentTools.length > 0) {
+          message.subagentTools = agentTools;
+        }
+      }
+
+      sortedMessages = messages.sort(
+        (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime(),
+      );
+
+      if (fileStat) {
+        sessionMessagesCache.set(jsonLPath, {
+          mtimeMs: fileStat.mtimeMs,
+          size: fileStat.size,
+          at: Date.now(),
+          sorted: sortedMessages,
+        });
       }
     }
 
-    const agentIds = new Set<string>();
-    for (const message of messages) {
-      const agentId = message.toolUseResult?.agentId;
-      if (agentId) {
-        agentIds.add(String(agentId));
-      }
-    }
-
-    for (const agentId of agentIds) {
-      const agentFileName = `agent-${agentId}.jsonl`;
-      if (!agentFiles.includes(agentFileName)) {
-        continue;
-      }
-
-      const agentFilePath = path.join(projectDir, agentFileName);
-      const tools = await parseAgentTools(agentFilePath);
-      agentToolsCache.set(agentId, tools);
-    }
-
-    for (const message of messages) {
-      const agentId = message.toolUseResult?.agentId;
-      if (!agentId) {
-        continue;
-      }
-
-      const agentTools = agentToolsCache.get(String(agentId));
-      if (agentTools && agentTools.length > 0) {
-        message.subagentTools = agentTools;
-      }
-    }
-
-    const sortedMessages = messages.sort(
-      (a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime(),
-    );
     const total = sortedMessages.length;
 
     if (limit === null) {
