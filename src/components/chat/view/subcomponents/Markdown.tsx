@@ -21,6 +21,12 @@ type CodeBlockProps = {
   children?: React.ReactNode;
 };
 
+// Syntax highlighting (Prism) tokenizes the whole block and is O(n) with a high
+// constant. Very large blocks — file dumps, big tool outputs — can take seconds
+// each, and a transcript full of them freezes the main thread on render. Above
+// this size we render plain (still selectable/copyable) and skip highlighting.
+const MAX_HIGHLIGHT_CHARS = 20000;
+
 const CodeBlock = ({ node, inline, className, children, ...props }: CodeBlockProps) => {
   const { t } = useTranslation('chat');
   const [copied, setCopied] = useState(false);
@@ -94,24 +100,44 @@ const CodeBlock = ({ node, inline, className, children, ...props }: CodeBlockPro
         )}
       </button>
 
-      <SyntaxHighlighter
-        language={language}
-        style={oneDark}
-        customStyle={{
-          margin: 0,
-          borderRadius: '0.5rem',
-          fontSize: '0.875rem',
-          padding: language && language !== 'text' ? '2rem 1rem 1rem 1rem' : '1rem',
-        }}
-        codeTagProps={{
-          style: {
-            fontFamily:
-              'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-          },
-        }}
-      >
-        {raw}
-      </SyntaxHighlighter>
+      {raw.length > MAX_HIGHLIGHT_CHARS ? (
+        <pre
+          className="overflow-x-auto rounded-lg bg-[#282c34] text-gray-100"
+          style={{
+            margin: 0,
+            fontSize: '0.875rem',
+            padding: language && language !== 'text' ? '2rem 1rem 1rem 1rem' : '1rem',
+          }}
+        >
+          <code
+            style={{
+              fontFamily:
+                'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+            }}
+          >
+            {raw}
+          </code>
+        </pre>
+      ) : (
+        <SyntaxHighlighter
+          language={language}
+          style={oneDark}
+          customStyle={{
+            margin: 0,
+            borderRadius: '0.5rem',
+            fontSize: '0.875rem',
+            padding: language && language !== 'text' ? '2rem 1rem 1rem 1rem' : '1rem',
+          }}
+          codeTagProps={{
+            style: {
+              fontFamily:
+                'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+            },
+          }}
+        >
+          {raw}
+        </SyntaxHighlighter>
+      )}
     </div>
   );
 };
