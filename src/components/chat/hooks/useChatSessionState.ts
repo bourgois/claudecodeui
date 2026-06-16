@@ -10,7 +10,12 @@ import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messag
 import { normalizedToChatMessages } from './useChatMessages';
 
 const MESSAGES_PER_PAGE = 20;
-const INITIAL_VISIBLE_MESSAGES = 100;
+// Render only a small window of the most recent messages on first paint, then
+// grow it as the user scrolls up. Rendering the whole fetched page at once
+// (markdown + highlighting) freezes the main thread on large sessions and
+// leaves the chat unusable; capping the initial render keeps it interactive
+// regardless of session size.
+const INITIAL_VISIBLE_MESSAGES = 10;
 
 type PendingViewSession = {
   startedAt: number;
