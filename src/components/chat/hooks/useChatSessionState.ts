@@ -15,7 +15,7 @@ const MESSAGES_PER_PAGE = 20;
 // (markdown + highlighting) freezes the main thread on large sessions and
 // leaves the chat unusable; capping the initial render keeps it interactive
 // regardless of session size.
-const INITIAL_VISIBLE_MESSAGES = 10;
+const INITIAL_VISIBLE_MESSAGES = 20;
 
 type PendingViewSession = {
   startedAt: number;
