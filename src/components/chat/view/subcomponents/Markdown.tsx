@@ -169,10 +169,40 @@ const markdownComponents = {
   ),
 };
 
+// Parsing + rendering markdown is O(n) with a high constant (remark/rehype/katex
+// plus per-code-block highlighting). A single very large message — a big tool
+// output or file dump — can take seconds to render, and a transcript full of
+// them freezes the main thread, leaving the chat stuck behind a "loading"
+// frame and unable to accept input. Above this size we show a cheap plain-text
+// preview with an opt-in "show full" toggle, so the page stays interactive and
+// the heavy render only runs when the user asks for it.
+const MAX_RENDER_CHARS = 50000;
+const PREVIEW_CHARS = 4000;
+
 export function Markdown({ children, className }: MarkdownProps) {
+  const { t } = useTranslation('chat');
   const content = normalizeInlineCodeFences(String(children ?? ''));
+  const [expanded, setExpanded] = useState(false);
   const remarkPlugins = useMemo(() => [remarkGfm, remarkMath], []);
   const rehypePlugins = useMemo(() => [rehypeKatex], []);
+
+  if (content.length > MAX_RENDER_CHARS && !expanded) {
+    return (
+      <div className={className}>
+        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-gray-100 p-3 text-sm text-gray-900 dark:bg-gray-800/60 dark:text-gray-100">
+          {content.slice(0, PREVIEW_CHARS)}
+          {'\n…'}
+        </pre>
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="mt-1 rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+        >
+          {t('codeBlock.showFull', { kb: Math.round(content.length / 1024), defaultValue: 'Show full message ({{kb}} KB)' })}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className={className}>
