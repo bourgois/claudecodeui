@@ -477,6 +477,17 @@ export function useSessionStore() {
     try {
       const params = new URLSearchParams();
 
+      // Bound the refresh to the window already loaded instead of pulling the
+      // entire transcript. Without a limit the server returns every message,
+      // which for large sessions can be tens of MB — fine on loopback but it
+      // stalls real network clients at "loading session messages" and gets
+      // re-triggered on every websocket update. offset 0 returns the most
+      // recent `limit` messages, matching the displayed tail.
+      const loadedCount = slot.serverMessages.length;
+      const refreshLimit = loadedCount > 0 ? loadedCount : 20;
+      params.append('limit', String(refreshLimit));
+      params.append('offset', '0');
+
       const qs = params.toString();
       const url = `/api/providers/sessions/${encodeURIComponent(resolvedSessionId)}/messages${qs ? `?${qs}` : ''}`;
       const response = await authenticatedFetch(url);
