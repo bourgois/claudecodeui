@@ -516,10 +516,15 @@ export function useChatSessionState({
     }).catch(() => {
       setIsLoadingSessionMessages(false);
     });
+    // Key on project identity primitives, not the whole selectedProject object,
+    // which is replaced on every session-sync refresh (sibling session metadata
+    // churn) and would otherwise re-run this load on a loop.
   }, [
     pendingViewSessionRef,
     resetStreamingState,
-    selectedProject,
+    selectedProject?.projectId,
+    selectedProject?.fullPath,
+    selectedProject?.path,
     selectedSession?.id,
     sendMessage,
     ws,
@@ -552,13 +557,19 @@ export function useChatSessionState({
     };
 
     reloadExternalMessages();
+    // externalMessageUpdate is the intended trigger; key the project/session on
+    // identity primitives so their object churn (session-sync refresh) doesn't
+    // re-run this refresh on a loop.
   }, [
     autoScrollToBottom,
     externalMessageUpdate,
     isNearBottom,
     scrollToBottom,
-    selectedProject,
-    selectedSession,
+    selectedProject?.projectId,
+    selectedProject?.fullPath,
+    selectedProject?.path,
+    selectedSession?.id,
+    selectedSession?.__provider,
     sessionStore,
     isLoading,
   ]);
@@ -688,7 +699,9 @@ export function useChatSessionState({
       }
     };
     fetchInitialTokenUsage();
-  }, [selectedProject, selectedSession?.id, selectedSession?.__provider]);
+    // Key on projectId, not the whole selectedProject object, so a sibling
+    // session's metadata churn (session-sync refresh) doesn't re-fetch on a loop.
+  }, [selectedProject?.projectId, selectedSession?.id, selectedSession?.__provider]);
 
   const visibleMessages = useMemo(() => {
     if (chatMessages.length <= visibleMessageCount) return chatMessages;

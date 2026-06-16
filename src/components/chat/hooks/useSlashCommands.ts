@@ -241,7 +241,10 @@ export function useSlashCommands({
     return () => {
       cancelled = true;
     };
-  }, [selectedProject, provider]);
+    // Depend on stable project identity primitives, not the whole selectedProject
+    // object: it gets a fresh identity whenever any sibling session's metadata
+    // changes (session-sync refresh), which would otherwise re-fetch on a loop.
+  }, [selectedProject?.projectId, selectedProject?.fullPath, selectedProject?.path, provider]);
 
   useEffect(() => {
     if (!showCommandMenu) {
