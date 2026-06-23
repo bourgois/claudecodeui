@@ -243,13 +243,19 @@ export async function initializeSessionsWatcher(): Promise<void> {
     try {
       await fsPromises.mkdir(rootPath, { recursive: true });
 
+      // Use native FS events (FSEvents/inotify) by default. Polling stat()s
+      // every watched file each interval; with thousands of session files
+      // (large multi-project setups) that pegs a CPU core continuously even
+      // when idle. Opt back into polling only where native events don't work
+      // (some network shares / container bind mounts) via CLOUDCLI_WATCH_POLLING.
+      const usePolling = process.env.CLOUDCLI_WATCH_POLLING === 'true';
       const watcher = chokidar.watch(rootPath, {
         ignored: WATCHER_IGNORED_PATTERNS,
         persistent: true,
         ignoreInitial: true,
         followSymlinks: false,
         depth: 6,
-        usePolling: true,
+        usePolling,
         interval: 6_000,
         binaryInterval: 6_000,
       });
