@@ -244,7 +244,16 @@ function mapCliOptionsToSDK(options = {}) {
  * @param {Array<string>} tempImagePaths - Temp image file paths for cleanup
  * @param {string} tempDir - Temp directory for cleanup
  */
-function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = null, writer = null) {
+async function addSession(sessionId, queryInstance, tempImagePaths = [], tempDir = null, writer = null) {
+  // Abort any prior live query for this sessionId before overwriting it.
+  // Otherwise the previous async-generator loop is orphaned — it's the only
+  // reference the server held, so abortClaudeSDKSession can no longer reach it,
+  // yet its for-await loop keeps spinning. Reconnect/re-query storms then leak
+  // generators that peg the (single-threaded) server CPU at 100%+ even with no
+  // client connected. See upstream issue siteboon/claudecodeui#885.
+  if (isClaudeSDKSessionActive(sessionId)) {
+    await abortClaudeSDKSession(sessionId);
+  }
   activeSessions.set(sessionId, {
     instance: queryInstance,
     startTime: Date.now(),
@@ -688,7 +697,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
 
     // Track the query instance for abort capability
     if (capturedSessionId) {
-      addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
+      await addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
     }
 
     // Process streaming messages
@@ -698,7 +707,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       if (message.session_id && !capturedSessionId) {
 
         capturedSessionId = message.session_id;
-        addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
+        await addSession(capturedSessionId, queryInstance, tempImagePaths, tempDir, ws);
 
         // Set session ID on writer
         if (ws.setSessionId && typeof ws.setSessionId === 'function') {
