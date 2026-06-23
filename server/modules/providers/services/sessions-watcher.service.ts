@@ -49,6 +49,13 @@ const WATCHER_IGNORED_PATTERNS = [
   '**/*.tmp',
   '**/*.swp',
   '**/.DS_Store',
+  // Gemini's watch root (~/.gemini/tmp) contains transient per-call
+  // tool-output files (tool-outputs/*.txt). They are not session artifacts
+  // (the event filter already ignores non-.json/.jsonl), but chokidar still
+  // *watches* them — on macOS each watched file holds an FD (kqueue/polling),
+  // so thousands of tool outputs leak FDs (observed ~14k), eventually causing
+  // `spawn EBADF` and constant change churn. Never watch them.
+  '**/tool-outputs/**',
 ];
 
 const PROJECTS_UPDATE_DEBOUNCE_MS = 500;
