@@ -40,12 +40,27 @@ const router = express.Router();
  */
 async function checkTaskMasterInstallation() {
     return new Promise((resolve) => {
-        // Check if task-master command is available
-        const child = spawn('which', ['task-master'], { 
-            stdio: ['ignore', 'pipe', 'pipe'],
-            shell: true 
-        });
-        
+        // Check if task-master command is available.
+        // spawn() can throw *synchronously* (e.g. EBADF in constrained launch
+        // environments — supervisors/PTYs with unusual stdio) before an 'error'
+        // listener can attach, which otherwise escapes to an unhandled rejection
+        // and a 500. Guard it and degrade to "not installed".
+        let child;
+        try {
+            child = spawn('which', ['task-master'], {
+                stdio: ['ignore', 'pipe', 'pipe'],
+                shell: true
+            });
+        } catch (error) {
+            resolve({
+                isInstalled: false,
+                installPath: null,
+                version: null,
+                reason: `TaskMaster check could not spawn a process (${error && error.code ? error.code : 'unknown'})`
+            });
+            return;
+        }
+
         let output = '';
         let errorOutput = '';
         
