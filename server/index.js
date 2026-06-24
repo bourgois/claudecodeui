@@ -1680,7 +1680,11 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
 }
 
 const SERVER_PORT = process.env.SERVER_PORT || 3001;
-const HOST = process.env.HOST || '0.0.0.0';
+// Dual-stack '::' (also accepts IPv4) instead of IPv4-only '0.0.0.0': `localhost`
+// resolves to both ::1 and 127.0.0.1, and Safari tries ::1 first — an IPv4-only
+// listener makes it wait ~70s for the IPv6 connection to time out before falling
+// back, so production (served directly on this port) appears to hang in Safari.
+const HOST = process.env.HOST || '::';
 const DISPLAY_HOST = getConnectableHost(HOST);
 const VITE_PORT = process.env.VITE_PORT || 5173;
 

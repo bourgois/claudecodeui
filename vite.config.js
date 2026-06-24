@@ -7,8 +7,15 @@ export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
   const env = loadEnv(mode, process.cwd(), '')
 
-  const configuredHost = env.HOST || '0.0.0.0'
-  // if the host is not a loopback address, it should be used directly. 
+  // Default to the IPv6 wildcard '::' (dual-stack — also accepts IPv4) instead
+  // of '0.0.0.0' (IPv4 only). /etc/hosts maps `localhost` to both 127.0.0.1 and
+  // ::1; Safari resolves ::1 first, so an IPv4-only listener leaves it waiting
+  // ~70s for the IPv6 connection to time out before falling back to IPv4 — the
+  // app appears to hang on every request. (Chrome's parallel Happy-Eyeballs
+  // hides it, which is why it only reproduced in Safari.) Binding dual-stack
+  // serves localhost over both address families.
+  const configuredHost = env.HOST || '::'
+  // if the host is not a loopback address, it should be used directly.
   // This allows the vite server to EXPOSE all interfaces when the host 
   // is set to '0.0.0.0' or '::', while still using 'localhost' for browser 
   // URLs and proxy targets.
