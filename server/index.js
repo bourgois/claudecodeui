@@ -149,12 +149,22 @@ app.locals.wss = wss;
 // e.g. the ~70s TTFB symptom). Cheap; safe to keep on.
 app.use((req, res, next) => {
   const startedAt = Date.now();
-  res.on('finish', () => {
+  // Catch requests that never finish (async hang — handler awaiting something
+  // that never resolves). res.on('finish') alone can't see these, so arm a
+  // timer that fires while the request is still in flight.
+  const stuckTimer = setInterval(() => {
+    console.warn(`[STUCK-REQUEST] ${req.method} ${req.originalUrl} still pending after ${Math.round((Date.now() - startedAt) / 1000)}s (no response yet)`);
+  }, 15000);
+  stuckTimer.unref?.();
+  const done = () => {
+    clearInterval(stuckTimer);
     const ms = Date.now() - startedAt;
     if (ms > 4000) {
       console.warn(`[SLOW-REQUEST] ${req.method} ${req.originalUrl} -> ${res.statusCode} in ${ms}ms`);
     }
-  });
+  };
+  res.on('finish', done);
+  res.on('close', done);
   next();
 });
 
