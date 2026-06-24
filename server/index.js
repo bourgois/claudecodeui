@@ -6,6 +6,7 @@ import path from 'path';
 import os from 'os';
 import http from 'http';
 import { spawn } from 'child_process';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 
 import express from 'express';
 import cors from 'cors';
@@ -141,6 +142,32 @@ const wss = createWebSocketServer(server, {
 
 // Make WebSocket server available to routes
 app.locals.wss = wss;
+
+// --- Diagnostics: pinpoint blocking that shows up as a huge TTFB ---------
+// Logs any request whose handler runs unusually long, and warns when the
+// single Node event loop stalls (which makes *every* queued request hang,
+// e.g. the ~70s TTFB symptom). Cheap; safe to keep on.
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - startedAt;
+    if (ms > 4000) {
+      console.warn(`[SLOW-REQUEST] ${req.method} ${req.originalUrl} -> ${res.statusCode} in ${ms}ms`);
+    }
+  });
+  next();
+});
+
+const eventLoopDelayHistogram = monitorEventLoopDelay({ resolution: 50 });
+eventLoopDelayHistogram.enable();
+setInterval(() => {
+  const maxStallMs = eventLoopDelayHistogram.max / 1e6;
+  if (maxStallMs > 2000) {
+    console.warn(`[EVENT-LOOP-STALL] blocked up to ${Math.round(maxStallMs)}ms in the last 10s — a synchronous operation is freezing the server`);
+  }
+  eventLoopDelayHistogram.reset();
+}, 10000).unref();
+// -------------------------------------------------------------------------
 
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token'] }));
 app.use(express.json({
