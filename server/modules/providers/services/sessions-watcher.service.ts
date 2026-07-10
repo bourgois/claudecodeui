@@ -41,22 +41,38 @@ const PROVIDER_WATCH_PATHS: Array<{ provider: LLMProvider; rootPath: string }> =
   },
 ];
 
-const WATCHER_IGNORED_PATTERNS = [
-  '**/node_modules/**',
-  '**/.git/**',
-  '**/dist/**',
-  '**/build/**',
-  '**/*.tmp',
-  '**/*.swp',
-  '**/.DS_Store',
-  // Gemini's watch root (~/.gemini/tmp) contains transient per-call
-  // tool-output files (tool-outputs/*.txt). They are not session artifacts
-  // (the event filter already ignores non-.json/.jsonl), but chokidar still
-  // *watches* them — on macOS each watched file holds an FD (kqueue/polling),
-  // so thousands of tool outputs leak FDs (observed ~14k), eventually causing
-  // `spawn EBADF` and constant change churn. Never watch them.
-  '**/tool-outputs/**',
-];
+// chokidar v4 REMOVED glob support in `ignored` — string globs like
+// '**/tool-outputs/**' silently match nothing, so the ignore list must be a
+// predicate (or RegExp). Returning true ignores the path; for a directory that
+// also prunes the whole subtree so chokidar never descends into it — critical
+// on macOS, where every watched file holds a kqueue FD.
+const IGNORED_DIR_SEGMENTS = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  // Gemini writes transient per-call tool outputs under tool-outputs/*.txt, and
+  // Claude writes subagent/workflow artifacts under <session>/subagents/**.
+  // Neither are session transcripts (the event filter already drops non-json),
+  // but chokidar still *watches* each one — on macOS that's one FD per file, so
+  // thousands of them leak FDs (observed ~14k) until `spawn`/`pty` calls fail
+  // with EBADF, which silently breaks the terminal for every session. Never
+  // descend into these directories.
+  'tool-outputs',
+  'subagents',
+]);
+
+const IGNORED_SUFFIXES = ['.tmp', '.swp', '.DS_Store'];
+
+function isIgnoredWatchPath(targetPath: string): boolean {
+  const segments = targetPath.split(path.sep);
+  for (const segment of segments) {
+    if (IGNORED_DIR_SEGMENTS.has(segment)) {
+      return true;
+    }
+  }
+  return IGNORED_SUFFIXES.some((suffix) => targetPath.endsWith(suffix));
+}
 
 const PROJECTS_UPDATE_DEBOUNCE_MS = 500;
 const PROJECTS_UPDATE_MAX_WAIT_MS = 2_000;
@@ -257,7 +273,7 @@ export async function initializeSessionsWatcher(): Promise<void> {
       // (some network shares / container bind mounts) via CLOUDCLI_WATCH_POLLING.
       const usePolling = process.env.CLOUDCLI_WATCH_POLLING === 'true';
       const watcher = chokidar.watch(rootPath, {
-        ignored: WATCHER_IGNORED_PATTERNS,
+        ignored: isIgnoredWatchPath,
         persistent: true,
         ignoreInitial: true,
         followSymlinks: false,
