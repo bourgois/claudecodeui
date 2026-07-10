@@ -26,6 +26,21 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
   private readonly claudeHome = path.join(os.homedir(), '.claude');
 
   /**
+   * Returns true when a JSONL file is a subagent transcript rather than a
+   * top-level session.
+   *
+   * Claude stores subagent transcripts under a `subagents/` directory, e.g.
+   * `~/.claude/projects/<encoded-cwd>/<session-id>/subagents/agent-<id>.jsonl`.
+   * Those files repeat the parent session's `sessionId`, so indexing them as
+   * standalone sessions overwrites the parent row's `jsonl_path` and corrupts
+   * the main session record. The recursive scan in `synchronize()` reaches
+   * them, so both entry points must skip them.
+   */
+  private isSubagentTranscript(filePath: string): boolean {
+    return path.normalize(filePath).split(path.sep).includes('subagents');
+  }
+
+  /**
    * Scans ~/.claude/projects and upserts discovered sessions into DB.
    */
   async synchronize(since?: Date): Promise<number> {
@@ -38,10 +53,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
 
     let processed = 0;
     for (const filePath of files) {
-      // Skip subagent JSONL files — they share the parent session's sessionId
-      // and would overwrite the correct jsonl_path with the subagent path
-      const pathSegments = path.normalize(filePath).split(path.sep);
-      if (pathSegments.includes('subagents')) {
+      if (this.isSubagentTranscript(filePath)) {
         continue;
       }
 
@@ -74,11 +86,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     if (!filePath.endsWith('.jsonl')) {
       return null;
     }
-    // PATCH (kamioj): 同 synchronize()，单文件路径走 watcher 进来时也要排除 subagents/
-    if (
-      filePath.includes(`${path.sep}subagents${path.sep}`) ||
-      filePath.replace(/\\/g, '/').includes('/subagents/')
-    ) {
+    if (this.isSubagentTranscript(filePath)) {
       return null;
     }
 
@@ -126,7 +134,10 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       return null;
     }
 
-    const existingSession = sessionsDb.getSessionById(parsed.sessionId);
+    // App-created sessions are keyed by an app id, so disk-discovered provider
+    // ids must be resolved through the provider-id mapping first.
+    const existingSession = sessionsDb.getSessionByProviderSessionId(parsed.sessionId)
+      ?? sessionsDb.getSessionById(parsed.sessionId);
     const existingSessionName = existingSession?.custom_name;
     if (existingSessionName && existingSessionName !== 'Untitled Claude Session') {
       return {

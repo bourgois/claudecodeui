@@ -14,13 +14,14 @@
  */
 
 import { Codex } from '@openai/codex-sdk';
+
+import { buildCodexInputItems, normalizeImageDescriptors } from './shared/image-attachments.js';
 import { notifyRunFailed, notifyRunStopped } from './services/notification-orchestrator.js';
 import { sessionsService } from './modules/providers/services/sessions.service.js';
 import { providerAuthService } from './modules/providers/services/provider-auth.service.js';
 import { providerModelsService } from './modules/providers/services/provider-models.service.js';
-import { createNormalizedMessage } from './shared/utils.js';
+import { createCompleteMessage, createNormalizedMessage } from './shared/utils.js';
 
-// Track active sessions
 const activeCodexSessions = new Map();
 
 function readUsageNumber(value) {
@@ -270,6 +271,8 @@ export async function queryCodex(command, options = {}, ws) {
     cwd,
     projectPath,
     model,
+    effort,
+    images,
     permissionMode
   } = options;
 
@@ -283,6 +286,12 @@ export async function queryCodex(command, options = {}, ws) {
   const effectivePermissionMode = resolveCodexPermissionMode(permissionMode, hasExplicitPermissionMode);
   const workingDirectory = cwd || projectPath || process.cwd();
   const { sandboxMode, approvalPolicy } = mapPermissionModeToCodexOptions(effectivePermissionMode);
+  const catalog = (await providerModelsService.getProviderModels('codex')).models;
+  const selectedModel = catalog.OPTIONS.find((option) => option.value === resolvedModel) || null;
+  const allowedEfforts = selectedModel?.effort?.values?.map((value) => value.value) || [];
+  const resolvedEffort = typeof effort === 'string' && effort !== 'default' && allowedEfforts.includes(effort)
+    ? effort
+    : undefined;
 
   let codex;
   let thread;
@@ -292,19 +301,17 @@ export async function queryCodex(command, options = {}, ws) {
   const abortController = new AbortController();
 
   try {
-    // Initialize Codex SDK
     codex = new Codex();
 
-    // Thread options with sandbox and approval settings
     const threadOptions = {
       workingDirectory,
       skipGitRepoCheck: true,
       sandboxMode,
       approvalPolicy,
-      model: resolvedModel
+      model: resolvedModel,
+      modelReasoningEffort: resolvedEffort,
     };
 
-    // Start or resume thread
     if (sessionId) {
       thread = codex.resumeThread(sessionId, threadOptions);
     } else {
@@ -324,13 +331,16 @@ export async function queryCodex(command, options = {}, ws) {
       });
     };
 
-    // Existing sessions can be tracked immediately; new sessions are tracked after thread.started.
     if (capturedSessionId) {
       registerSession(capturedSessionId);
     }
 
-    // Execute with streaming
-    const streamedTurn = await thread.runStreamed(command, {
+    // Execute with streaming. Turns with image attachments send structured
+    // input items so Codex reads the images from their local asset paths.
+    const turnInput = normalizeImageDescriptors(images).length > 0
+      ? buildCodexInputItems(command, images, workingDirectory)
+      : command;
+    const streamedTurn = await thread.runStreamed(turnInput, {
       signal: abortController.signal
     });
 
@@ -396,21 +406,26 @@ export async function queryCodex(command, options = {}, ws) {
       }
     }
 
-    // Send completion event
-    if (!terminalFailure) {
-      sendMessage(ws, createNormalizedMessage({
-        kind: 'complete',
-        actualSessionId: capturedSessionId || thread.id || sessionId || null,
-        sessionId: capturedSessionId || sessionId || null,
-        provider: 'codex'
-      }));
-      notifyRunStopped({
-        userId: ws?.userId || null,
+    // Send the terminal completion event — skipped for aborted runs, whose
+    // terminal `complete` (aborted: true) was already sent by abort-session.
+    const runSession = capturedSessionId ? activeCodexSessions.get(capturedSessionId) : null;
+    const runAborted = runSession?.status === 'aborted' || abortController.signal.aborted;
+    if (!runAborted) {
+      sendMessage(ws, createCompleteMessage({
         provider: 'codex',
         sessionId: capturedSessionId || sessionId || null,
-        sessionName: sessionSummary,
-        stopReason: 'completed'
-      });
+        actualSessionId: capturedSessionId || thread.id || sessionId || null,
+        exitCode: terminalFailure ? 1 : 0,
+      }));
+      if (!terminalFailure) {
+        notifyRunStopped({
+          userId: ws?.userId || null,
+          provider: 'codex',
+          sessionId: capturedSessionId || sessionId || null,
+          sessionName: sessionSummary,
+          stopReason: 'completed'
+        });
+      }
     }
 
   } catch (error) {
@@ -430,6 +445,11 @@ export async function queryCodex(command, options = {}, ws) {
         : error.message;
 
       sendMessage(ws, createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'codex' }));
+      sendMessage(ws, createCompleteMessage({
+        provider: 'codex',
+        sessionId: capturedSessionId || sessionId || null,
+        exitCode: 1,
+      }));
       if (!terminalFailure) {
         notifyRunFailed({
           userId: ws?.userId || null,
